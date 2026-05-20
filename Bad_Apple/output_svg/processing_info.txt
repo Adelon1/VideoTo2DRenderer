@@ -11,6 +11,7 @@
     "source_fps": "30",
     "source_duration": 219.066667,
     "source_nb_frames": 6572,
+    "potrace_unit": 1,
     "requested_fps": "source",
     "effective_fps": "30",
     "requested_scale_width": "source",

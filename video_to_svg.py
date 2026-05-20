@@ -15,7 +15,7 @@ import numpy as np
 # =====================
 
 INPUT_MP4 = Path(constants.FOLDER_NAME) / constants.SOURCE_VIDEO_NAME
-OUTPUT_DIR = Path(constants.FOLDER_NAME) / "output_svg"
+OUTPUT_DIR = Path(constants.FOLDER_SVG)
 RUN_INFO_FILE = OUTPUT_DIR / "processing_info.txt"
 
 # Set to None to use the video's original FPS.
@@ -42,6 +42,7 @@ OPT_TOLERANCE = 0.8
 # Set to a small number like 10 for testing.
 FRAME_LIMIT = constants.FRAME_LIMIT
 
+POTRACE_UNIT = 1
 
 def main():
     check_tools()
@@ -207,6 +208,8 @@ def build_config(video_info, effective_fps, width, height):
         "source_fps": format_fraction(video_info["fps"]),
         "source_duration": video_info["duration"],
         "source_nb_frames": video_info["nb_frames"],
+
+        "potrace_unit": POTRACE_UNIT,
 
         "requested_fps": "source" if FPS is None else str(FPS),
         "effective_fps": format_fraction(effective_fps),
@@ -408,6 +411,7 @@ def run_potrace(pbm_data, output_svg):
     cmd = [
         "potrace",
         "-s",
+        "--unit", str(POTRACE_UNIT),
         "--turdsize", str(TURD_SIZE),
         "--opttolerance", str(OPT_TOLERANCE),
         "-o", str(output_svg),
