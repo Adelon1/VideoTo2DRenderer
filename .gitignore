@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+
+*.svg
+*.mp4
+*.webm
+*.mkv
+*.mov
+
+desmos_frame.html
