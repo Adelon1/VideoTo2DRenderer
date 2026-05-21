@@ -4,8 +4,6 @@ import subprocess
 import time
 
 import constants as C
-import inputs
-
 
 def main():
     start_time = time.time()
@@ -24,7 +22,7 @@ def main():
 
     if not youtube_link:
         raise RuntimeError(
-            "No YouTube link found in inputs.py, and the existing source video "
+            "No YouTube link found in constants.py, and the existing source video "
             "does not match the current download cache."
         )
 
@@ -59,7 +57,7 @@ def ensure_video_folder():
 
 
 def get_youtube_link():
-    return (inputs.YOUTUBE_LINK or "").strip()
+    return (C.YOUTUBE_LINK or "").strip()
 
 
 def print_job_info(youtube_link):
