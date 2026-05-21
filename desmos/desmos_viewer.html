@@ -118,6 +118,10 @@
     window.__V2D_RENDER_ERROR = null;
     window.__V2D_RENDER_STAGE = "idle";
 
+    // ============================================================
+    // Calculator setup
+    // ============================================================
+
     function normalizeSettings(settings) {
       return {
         show_grid: settings?.show_grid ?? false,
@@ -163,14 +167,14 @@
       });
     }
 
-    async function loadFrame() {
-      window.__V2D_RENDER_DONE = false;
-      window.__V2D_RENDER_FRAME = null;
-      window.__V2D_RENDER_ERROR = null;
-      window.__V2D_RENDER_STAGE = "loading-json";
+    // ============================================================
+    // Frame loading
+    // ============================================================
 
+    async function loadFrame() {
       try {
-        status.textContent = "Loading...";
+        window.__V2D_RENDER_STAGE = "loading-json";
+        status.textContent = "Loading JSON...";
 
         const response = await fetch(CURRENT_FRAME_JSON + "?time=" + Date.now());
 
@@ -179,6 +183,25 @@
         }
 
         const data = await response.json();
+
+        return await loadFrameData(data);
+      } catch (error) {
+        console.error(error);
+        window.__V2D_RENDER_ERROR = String(error);
+        window.__V2D_RENDER_DONE = false;
+        window.__V2D_RENDER_STAGE = "error";
+        status.textContent = "Error loading frame";
+        return false;
+      }
+    }
+
+    async function loadFrameData(data) {
+      window.__V2D_RENDER_DONE = false;
+      window.__V2D_RENDER_FRAME = null;
+      window.__V2D_RENDER_ERROR = null;
+      window.__V2D_RENDER_STAGE = "loading-frame-data";
+
+      try {
         const settings = normalizeSettings(data.settings);
 
         window.__V2D_RENDER_STAGE = "creating-calculator";
@@ -211,10 +234,14 @@
         window.__V2D_RENDER_ERROR = String(error);
         window.__V2D_RENDER_DONE = false;
         window.__V2D_RENDER_STAGE = "error";
-        status.textContent = "Error loading frame";
+        status.textContent = "Error loading frame data";
         return false;
       }
     }
+
+    // ============================================================
+    // Desmos screenshot signal
+    // ============================================================
 
     function getCurrentScreenshotMathBounds() {
       const savedViewport = getSavedViewport();
@@ -293,6 +320,10 @@
       }
     }
 
+    // ============================================================
+    // Viewport
+    // ============================================================
+
     function applyBestViewport() {
       const savedViewport = getSavedViewport();
 
@@ -359,6 +390,15 @@
       }
     }
 
+    function saveCurrentViewportToLocalStorage() {
+      saveDefaultView();
+      return true;
+    }
+
+    // ============================================================
+    // UI
+    // ============================================================
+
     function toggleToolbar() {
       toolbar.classList.toggle("open");
 
@@ -376,9 +416,11 @@
     }
 
     window.loadFrame = loadFrame;
+    window.loadFrameData = loadFrameData;
     window.fitFrame = fitFrame;
     window.setScreenshotMode = setScreenshotMode;
     window.captureCurrentFrameScreenshot = captureCurrentFrameScreenshot;
+    window.saveCurrentViewportToLocalStorage = saveCurrentViewportToLocalStorage;
 
     document.getElementById("toggleToolbar").onclick = toggleToolbar;
     document.getElementById("quickReload").onclick = loadFrame;

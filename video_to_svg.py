@@ -2,7 +2,6 @@ from fractions import Fraction
 import json
 import shutil
 import subprocess
-import sys
 import time
 
 import cv2
@@ -102,6 +101,7 @@ def print_project_info(video_info, width, height, effective_fps):
     print(f"FPS:                {format_fraction(effective_fps)}")
     print(f"Mode:               {C.VIDEO_PROCESSING_MODE}")
     print(f"Frame limit:        {C.FRAME_LIMIT}")
+    print(f"MAX_SEGMENTS:       {C.MAX_SEGMENTS}")
     print()
 
 
@@ -242,17 +242,26 @@ def build_config(video_info, effective_fps, width, height):
 
         "threshold": C.THRESHOLD,
 
+        "potrace_unit": C.POTRACE_UNIT,
+        "turd_size": C.TURD_SIZE,
+        "opt_tolerance": C.OPT_TOLERANCE,
+
+        "max_segments": C.MAX_SEGMENTS,
+
         "canny_blur_size": C.CANNY_BLUR_SIZE,
         "canny_low_threshold": C.CANNY_LOW_THRESHOLD,
         "canny_high_threshold": C.CANNY_HIGH_THRESHOLD,
+
         "edge_min_contour_points": C.EDGE_MIN_CONTOUR_POINTS,
         "edge_simplify_epsilon": C.EDGE_SIMPLIFY_EPSILON,
         "edge_stroke_width": C.EDGE_STROKE_WIDTH,
         "edge_stroke_color": C.EDGE_STROKE_COLOR,
 
-        "potrace_unit": C.POTRACE_UNIT,
-        "turd_size": C.TURD_SIZE,
-        "opt_tolerance": C.OPT_TOLERANCE,
+        "edge_adaptive_simplify": C.EDGE_ADAPTIVE_SIMPLIFY,
+        "edge_adaptive_max_iterations": C.EDGE_ADAPTIVE_MAX_ITERATIONS,
+        "edge_adaptive_epsilon_multiplier": C.EDGE_ADAPTIVE_EPSILON_MULTIPLIER,
+        "edge_adaptive_min_points_multiplier": C.EDGE_ADAPTIVE_MIN_POINTS_MULTIPLIER,
+        "edge_drop_smallest_contours_if_needed": C.EDGE_DROP_SMALLEST_CONTOURS_IF_NEEDED,
     }
 
 
@@ -416,19 +425,17 @@ def write_frame_svg(gray, output_svg, width, height):
 
 
 # ============================================================
-# Better edge mode: Canny → SVG stroke paths
+# Edge mode: Canny → adaptive SVG stroke paths
 # ============================================================
 
 def write_centerline_edge_svg(gray, output_svg, width, height):
     """
     Creates SVG stroke paths directly from Canny contours.
 
-    Important:
     This does NOT use Potrace.
 
-    Potrace outlines black pixel regions, which is why the old edge mode
-    produced two lines for one visual stroke. This mode writes centerline
-    SVG paths with fill='none' and stroke='black'.
+    If C.MAX_SEGMENTS is set, this adaptively simplifies the frame so the
+    generated SVG has at most C.MAX_SEGMENTS line segments.
     """
     edges = detect_canny_edges(gray)
 
@@ -438,25 +445,19 @@ def write_centerline_edge_svg(gray, output_svg, width, height):
         cv2.CHAIN_APPROX_NONE,
     )
 
-    path_strings = []
+    contour_points = [
+        contour.reshape(-1, 2)
+        for contour in contours
+        if len(contour.reshape(-1, 2)) >= C.EDGE_MIN_CONTOUR_POINTS
+    ]
 
-    for contour in contours:
-        points = contour.reshape(-1, 2)
-
-        if len(points) < C.EDGE_MIN_CONTOUR_POINTS:
-            continue
-
-        points = simplify_contour(points)
-
-        if len(points) < C.EDGE_MIN_CONTOUR_POINTS:
-            continue
-
-        path_strings.append(points_to_svg_path(points))
+    path_strings, segment_count = compress_contours_to_segment_budget(contour_points)
 
     svg_text = build_stroke_svg(
         width=width,
         height=height,
         path_strings=path_strings,
+        segment_count=segment_count,
     )
 
     output_svg.write_text(svg_text, encoding="utf-8")
@@ -481,8 +482,139 @@ def detect_canny_edges(gray):
     return edges
 
 
-def simplify_contour(points):
+def compress_contours_to_segment_budget(contour_points):
+    """
+    Simplifies all contours until the total segment count fits under C.MAX_SEGMENTS.
+
+    This is better than truncating later in Desmos because it preserves the
+    whole image structure at lower quality.
+    """
+    if C.MAX_SEGMENTS is None or not C.EDGE_ADAPTIVE_SIMPLIFY:
+        items = simplify_contours(
+            contour_points=contour_points,
+            epsilon=C.EDGE_SIMPLIFY_EPSILON,
+            min_points=C.EDGE_MIN_CONTOUR_POINTS,
+        )
+
+        return items_to_paths(items)
+
+    max_segments = int(C.MAX_SEGMENTS)
+
     epsilon = float(C.EDGE_SIMPLIFY_EPSILON)
+    min_points = int(C.EDGE_MIN_CONTOUR_POINTS)
+
+    best_items = []
+
+    for _ in range(C.EDGE_ADAPTIVE_MAX_ITERATIONS):
+        items = simplify_contours(
+            contour_points=contour_points,
+            epsilon=epsilon,
+            min_points=min_points,
+        )
+
+        total_segments = count_item_segments(items)
+        best_items = items
+
+        if total_segments <= max_segments:
+            return items_to_paths(items)
+
+        epsilon *= C.EDGE_ADAPTIVE_EPSILON_MULTIPLIER
+        min_points = max(
+            min_points + 1,
+            int(min_points * C.EDGE_ADAPTIVE_MIN_POINTS_MULTIPLIER),
+        )
+
+    if C.EDGE_DROP_SMALLEST_CONTOURS_IF_NEEDED:
+        selected_items = keep_most_important_items(
+            items=best_items,
+            max_segments=max_segments,
+        )
+
+        return items_to_paths(selected_items)
+
+    return items_to_paths(best_items)
+
+
+def simplify_contours(contour_points, epsilon, min_points):
+    items = []
+
+    for points in contour_points:
+        if len(points) < min_points:
+            continue
+
+        simplified = simplify_contour(points, epsilon)
+
+        if len(simplified) < min_points:
+            continue
+
+        segment_count = max(0, len(simplified) - 1)
+
+        if segment_count <= 0:
+            continue
+
+        items.append({
+            "points": simplified,
+            "segment_count": segment_count,
+            "importance": contour_importance(points),
+        })
+
+    return items
+
+
+def keep_most_important_items(items, max_segments):
+    sorted_items = sorted(
+        items,
+        key=lambda item: item["importance"],
+        reverse=True,
+    )
+
+    selected = []
+    total_segments = 0
+
+    for item in sorted_items:
+        next_total = total_segments + item["segment_count"]
+
+        if next_total > max_segments:
+            continue
+
+        selected.append(item)
+        total_segments = next_total
+
+    return selected
+
+
+def count_item_segments(items):
+    return sum(item["segment_count"] for item in items)
+
+
+def items_to_paths(items):
+    path_strings = []
+    total_segments = 0
+
+    for item in items:
+        path_strings.append(points_to_svg_path(item["points"]))
+        total_segments += item["segment_count"]
+
+    return path_strings, total_segments
+
+
+def contour_importance(points):
+    """
+    Larger/longer contours are usually more visually important.
+    """
+    points = points.astype(np.float32)
+
+    if len(points) < 2:
+        return 0
+
+    diffs = points[1:] - points[:-1]
+    lengths = np.sqrt((diffs ** 2).sum(axis=1))
+
+    return float(lengths.sum())
+
+
+def simplify_contour(points, epsilon):
+    epsilon = float(epsilon)
 
     if epsilon <= 0:
         return points
@@ -509,7 +641,7 @@ def points_to_svg_path(points):
     return " ".join(commands)
 
 
-def build_stroke_svg(width, height, path_strings):
+def build_stroke_svg(width, height, path_strings, segment_count):
     paths = []
 
     for d in path_strings:
@@ -525,7 +657,7 @@ def build_stroke_svg(width, height, path_strings):
     body = "\n  ".join(paths)
 
     return f"""<?xml version="1.0" standalone="no"?>
-<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">
+<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" data-segment-count="{segment_count}" xmlns="http://www.w3.org/2000/svg">
   {body}
 </svg>
 """

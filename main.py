@@ -13,7 +13,7 @@ def main():
     import svg_to_desmos_img
     import desmos_img_to_video
 
-    getVideo.main()
+    #getVideo.main()
     video_to_svg.main()
     svg_to_desmos_img.main()
     desmos_img_to_video.main()

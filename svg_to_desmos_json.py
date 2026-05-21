@@ -17,55 +17,66 @@ def main():
     start_time = time.time()
 
     svg_path = get_preview_svg_path()
+
     frame_data = svg_to_frame_data(svg_path)
 
-    print_job_info(svg_path, frame_data)
+    print_project_info(svg_path, frame_data)
 
-    if current_frame_json_is_current(frame_data):
+    if current_frame_already_written(frame_data):
         print("current_frame.json already exists with the same SVG/settings. Skipping.")
         return
 
     write_current_frame_json(frame_data)
 
     elapsed = time.time() - start_time
+
     print(f"Wrote {C.PATH_CURRENT_FRAME_JSON}")
+    print(f"Expressions: {len(frame_data['expressions'])}")
+    print(f"Frame size in Desmos: {frame_data['frame']['width']} x {frame_data['frame']['height']}")
+    print(f"Viewport: {frame_data['viewport']}")
     print(f"Elapsed: {elapsed:.2f}s")
 
 
 # ============================================================
-# Direct-run setup
+# Setup / direct-run helpers
 # ============================================================
 
 def get_preview_svg_path():
     """
     Used only when running this file directly.
 
-    The image renderer calls:
+    The renderer calls:
         svg_to_frame_data(svg_path)
 
-    directly for each SVG frame.
+    directly for each frame.
     """
     svg_path = C.PATH_SVG_FOLDER / f"frame_{C.PREVIEW_FRAME_NUMBER:05d}.svg"
 
     if not svg_path.exists():
-        raise RuntimeError(
-            f"Preview SVG frame not found: {svg_path}\n"
-            "Run video_to_svg.py first or change PREVIEW_FRAME_NUMBER."
-        )
+        raise RuntimeError(f"Preview SVG frame not found: {svg_path}")
 
     return svg_path
 
 
-def print_job_info(svg_path, frame_data):
+def print_project_info(svg_path, frame_data):
     print()
     print("VideoTo2DRenderer SVG-to-Desmos JSON job")
     print("----------------------------------------")
-    print(f"SVG input:     {svg_path}")
-    print(f"JSON output:   {C.PATH_CURRENT_FRAME_JSON}")
-    print(f"Frame number:  {frame_data['frame_number']}")
-    print(f"Segments:      {frame_data['segment_count']}")
-    print(f"Expressions:   {len(frame_data['expressions'])}")
-    print(f"Viewport:      {frame_data['viewport']}")
+    print(f"Project root:        {C.PROJECT_ROOT}")
+    print(f"SVG input:           {svg_path}")
+    print(f"Current JSON output: {C.PATH_CURRENT_FRAME_JSON}")
+    print(f"Frame number:        {frame_data['frame_number']}")
+    print(f"Segments:            {frame_data['segment_count']}")
+    print(f"Expressions:         {len(frame_data['expressions'])}")
+
+    if C.MAX_SEGMENTS is not None and frame_data["segment_count"] > C.MAX_SEGMENTS:
+        print()
+        print("Warning:")
+        print(f"  This SVG has {frame_data['segment_count']} segments.")
+        print(f"  MAX_SEGMENTS is {C.MAX_SEGMENTS}.")
+        print("  svg_to_desmos_json.py does not cut off expressions.")
+        print("  Compression should happen earlier in video_to_svg.py.")
+
     print()
 
 
@@ -75,21 +86,25 @@ def print_job_info(svg_path, frame_data):
 
 def svg_to_frame_data(svg_path: Path):
     """
-    Converts one SVG file into the JSON dictionary loaded by desmos_viewer.html.
+    Converts one SVG file into a JSON-compatible dictionary that the
+    Desmos HTML viewer can load.
+
+    Important:
+    This function does NOT truncate segments with C.MAX_SEGMENTS.
+    Segment limiting/compression should happen earlier in video_to_svg.py.
     """
     paths, path_attributes, svg_attributes = svg2paths2(str(svg_path))
 
     segments = collect_segments(paths)
+
     svg_frame = get_svg_frame(svg_attributes, segments)
+
     scale = get_scale(svg_frame)
 
     mapper, viewport, desmos_frame = make_frame_mapper_and_viewport(
         svg_frame=svg_frame,
         scale=scale,
     )
-
-    if C.MAX_SEGMENTS is not None:
-        segments = segments[:C.MAX_SEGMENTS]
 
     frame_number = get_frame_number(svg_path)
 
@@ -140,16 +155,17 @@ def build_expressions(frame_number, segments, mapper, desmos_frame):
 
 
 # ============================================================
-# Cache
+# Cache / skip repeated direct calls
 # ============================================================
 
-def current_frame_json_is_current(frame_data):
+def current_frame_already_written(frame_data):
     if not C.PATH_CURRENT_FRAME_JSON.exists():
         return False
 
     try:
         previous = json.loads(C.PATH_CURRENT_FRAME_JSON.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
+        print("Existing current_frame.json is not valid JSON. Rewriting.")
         return False
 
     return previous.get("cache") == frame_data.get("cache")
@@ -180,8 +196,6 @@ def build_current_frame_cache(svg_path: Path):
         "anchor_point": list(C.ANCHOR_POINT),
         "flip_y": C.FLIP_Y,
         "round_digits": C.ROUND_DIGITS,
-
-        "max_segments": C.MAX_SEGMENTS,
 
         "line_width": C.LINE_WIDTH,
         "line_color": C.LINE_COLOR,
@@ -264,10 +278,13 @@ def get_svg_frame(svg_attributes, segments):
         }
 
     if segments:
-        print("Warning: Could not find SVG viewBox/width/height. Falling back to path bounds.")
+        print("Warning: Could not find SVG viewBox/width/height.")
+        print("Falling back to path bounds.")
+
         return get_path_bounds_as_frame(segments)
 
-    print("Warning: No SVG size metadata and no path segments found. Using 1x1 fallback frame.")
+    print("Warning: No SVG size metadata and no path segments found.")
+    print("Using default fallback frame 1x1.")
 
     return {
         "x": 0,
@@ -356,7 +373,10 @@ def make_frame_mapper_and_viewport(svg_frame, scale):
         else:
             local_y = (point.imag - svg_y) * scale
 
-        return clean(local_x + offset_x), clean(local_y + offset_y)
+        x = local_x + offset_x
+        y = local_y + offset_y
+
+        return clean(x), clean(y)
 
     viewport = {
         "left": clean(offset_x),

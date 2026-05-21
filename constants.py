@@ -1,3 +1,32 @@
+# ============================================================
+# Chromium / GPU settings
+# ============================================================
+
+# Always use Playwright Chromium.
+#
+# If your whole desktop/session is already running on NVIDIA/dGPU-only,
+# keep this False. Chromium should use NVIDIA automatically.
+#
+# If someone else uses hybrid graphics and wants PRIME offload, they can
+# set this to True.
+USE_NVIDIA_PRIME = False
+
+# Used only when USE_NVIDIA_PRIME = True.
+NVIDIA_PRIME_ENV = {
+    "__NV_PRIME_RENDER_OFFLOAD": "1",
+    "__GLX_VENDOR_LIBRARY_NAME": "nvidia",
+    "__VK_LAYER_NV_optimus": "NVIDIA_only",
+}
+
+# Print WebGL GPU info once per worker.
+PRINT_BROWSER_GPU_INFO = True
+
+
+
+# ============================================================
+# Project structure and constants
+# ============================================================
+
 """
 Project-wide constants for VideoTo2DRenderer.
 
@@ -40,6 +69,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # Video project folder
 # ============================================================
 
+# The link to the YouTube video to be processed.
+# If this is empty, the script will not download a new video.
+# Example link to Bad Apple:
+YOUTUBE_LINK = "https://www.youtube.com/watch?v=AnEGaKtbs2E&list=RDAnEGaKtbs2E&start_radio=1"
+
 # Each video gets its own folder.
 #
 # Example:
@@ -49,13 +83,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # ├── output_svg/
 # ├── rendered_frames/
 # └── desmos_render.mp4
-
-# The link to the YouTube video to be processed.
-# If this is empty, the script will not download a new video.
-# Example link to Bad Apple:
-YOUTUBE_LINK = "https://www.youtube.com/watch?v=FtutLA63Cp8&list=RDFtutLA63Cp8&start_radio=1"
-
-FOLDER_VIDEO = "Bad_Apple"
+FOLDER_VIDEO = "Everyone"
 
 SOURCE_VIDEO_NAME = "source.mp4"
 
@@ -123,10 +151,10 @@ DOWNLOAD_CACHE_VERSION = 1
 # ============================================================
 
 # If FPS = None, use the original video FPS.
-FPS = None
+FPS = 15
 
 # If SCALE_WIDTH = None, use the original video width.
-SCALE_WIDTH = None
+SCALE_WIDTH = 500
 
 # If FRAME_LIMIT = None, process all frames.
 FRAME_LIMIT = None
@@ -161,21 +189,46 @@ POTRACE_UNIT = 1
 #
 # This mode does NOT use Potrace.
 # It uses OpenCV Canny edge detection and writes SVG stroke paths directly.
-CANNY_BLUR_SIZE = 4
-CANNY_LOW_THRESHOLD = 20
-CANNY_HIGH_THRESHOLD = 140
+CANNY_BLUR_SIZE = 3
+CANNY_LOW_THRESHOLD = 60
+CANNY_HIGH_THRESHOLD = 120
 
 # Remove tiny contour fragments.
-EDGE_MIN_CONTOUR_POINTS = 3
+EDGE_MIN_CONTOUR_POINTS = 2
 
 # Simplify contours before writing SVG.
 # Larger value = fewer points, less detail.
 # Smaller value = more detail.
-EDGE_SIMPLIFY_EPSILON = 0.9
+EDGE_SIMPLIFY_EPSILON = 1.5
 
 # SVG stroke style for edge mode.
 EDGE_STROKE_WIDTH = 1
 EDGE_STROKE_COLOR = "#000000"
+
+
+# ============================================================
+# Edge adaptive compression settings
+# ============================================================
+
+# If MAX_SEGMENTS is not None, video_to_svg.py compresses each edge SVG
+# until it fits under MAX_SEGMENTS.
+#
+# This is better than cutting off Desmos expressions later because the whole
+# frame gets lower quality instead of missing large regions.
+EDGE_ADAPTIVE_SIMPLIFY = True
+
+# Maximum simplification attempts per frame.
+EDGE_ADAPTIVE_MAX_ITERATIONS = 12
+
+# Applied to EDGE_SIMPLIFY_EPSILON after each failed attempt.
+EDGE_ADAPTIVE_EPSILON_MULTIPLIER = 1.35
+
+# Applied to EDGE_MIN_CONTOUR_POINTS after each failed attempt.
+EDGE_ADAPTIVE_MIN_POINTS_MULTIPLIER = 1.15
+
+# If still over budget after simplification, remove the least important
+# small contours until the frame fits.
+EDGE_DROP_SMALLEST_CONTOURS_IF_NEEDED = True
 
 
 # ============================================================
@@ -188,7 +241,7 @@ PATH_PROCESSING_INFO = PATH_VIDEO_FOLDER / FILE_PROCESSING_INFO
 
 # Increase this if video_to_svg.py changes in a way that should invalidate
 # old SVG frames.
-VIDEO_TO_SVG_CACHE_VERSION = 2
+VIDEO_TO_SVG_CACHE_VERSION = 1
 
 
 # ============================================================
@@ -230,9 +283,14 @@ ROUND_DIGITS = 4
 # SVG-to-Desmos expression settings
 # ============================================================
 
-# If MAX_SEGMENTS = None, convert all SVG path segments.
-# If a number, only convert the first N segments.
-MAX_SEGMENTS = None
+# Maximum amount of SVG segments allowed in a generated SVG frame.
+#
+# Important:
+# This is now handled during video_to_svg.py generation/compression.
+# svg_to_desmos_json.py does NOT cut off expressions anymore.
+#
+# If None, do not compress by segment budget.
+MAX_SEGMENTS = 1500
 
 # Desmos line style for SVG paths.
 LINE_WIDTH = 1
@@ -256,7 +314,7 @@ FRAME_NUMBER_VARIABLE = "f"
 
 # Used only when running svg_to_desmos_json.py directly.
 # The full renderer passes SVG paths manually.
-PREVIEW_FRAME_NUMBER = 2990
+PREVIEW_FRAME_NUMBER = 0
 
 # Increase this if svg_to_desmos_json.py changes in a way that should
 # invalidate old current_frame.json files.
@@ -299,11 +357,21 @@ DESMOS_SCREENSHOT_SHOW_LABELS = False
 
 
 # ============================================================
+# Desmos viewport storage
+# ============================================================
+
+# Stores the browser localStorage after you set/save the Desmos viewpoint.
+# Used when rerendering only selected bad frames later.
+FILE_DESMOS_STORAGE_STATE = "desmos_storage_state.json"
+PATH_DESMOS_STORAGE_STATE = PATH_VIDEO_FOLDER / FILE_DESMOS_STORAGE_STATE
+
+
+# ============================================================
 # Browser / screenshot size
 # ============================================================
 
 # Browser viewport size used by Playwright.
-# This is the size of the final saved PNG frames.   
+# This is the size of the final saved PNG frames.
 SCREENSHOT_WIDTH = 1920
 SCREENSHOT_HEIGHT = 1080
 
@@ -311,13 +379,33 @@ SCREENSHOT_HEIGHT = 1080
 SCREENSHOT_MODE = True
 
 # False = visible browser.
-# True = hidden browser.
+# True = hidden browser after manual setup.
 HEADLESS = True
 
 # If True, the first frame opens in the browser and waits before rendering.
 # Use this to set and save the default Desmos viewpoint.
 WAIT_BEFORE_DESMOS_IMG_RENDER = True
 DESMOS_IMG_START_KEY = "s"
+
+
+# ============================================================
+# Screenshot paint settling
+# ============================================================
+
+# After Desmos asyncScreenshot() returns, the visible Chromium viewport may
+# still be one paint behind.
+#
+# If True, the browser measures its own requestAnimationFrame interval and
+# waits at least one rounded-up frame duration before Playwright screenshots.
+AUTO_SCREENSHOT_SETTLE_FROM_REFRESH_RATE = True
+
+# Used only if refresh-rate measurement fails.
+FALLBACK_REFRESH_RATE = 60
+
+# Add extra safety frames.
+# 0 = wait roughly one frame.
+# 1 = wait roughly two frames.
+SCREENSHOT_EXTRA_SETTLE_FRAMES = 0
 
 
 # ============================================================
@@ -329,6 +417,13 @@ START_INDEX = 0
 
 # If RENDER_FRAME_LIMIT = None, render all SVG frames.
 RENDER_FRAME_LIMIT = None
+
+# Number of parallel browser workers used for rendering Desmos images.
+#
+# 1 = old sequential behavior.
+# 2-4 = good starting range.
+# Higher values may be faster or may overload RAM/Chromium/GPU.
+DESMOS_RENDER_WORKERS = 6
 
 
 # ============================================================
