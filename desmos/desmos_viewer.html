@@ -449,7 +449,12 @@
       }
     });
 
+  const urlParams = new URLSearchParams(window.location.search);
+  const directMode = urlParams.get("direct") === "1";
+
+  if (!directMode) {
     loadFrame();
+  }
   </script>
 </body>
 </html>

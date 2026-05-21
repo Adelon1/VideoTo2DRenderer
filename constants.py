@@ -151,10 +151,10 @@ DOWNLOAD_CACHE_VERSION = 1
 # ============================================================
 
 # If FPS = None, use the original video FPS.
-FPS = 15
+FPS = None
 
 # If SCALE_WIDTH = None, use the original video width.
-SCALE_WIDTH = 500
+SCALE_WIDTH = None
 
 # If FRAME_LIMIT = None, process all frames.
 FRAME_LIMIT = None
@@ -290,7 +290,7 @@ ROUND_DIGITS = 4
 # svg_to_desmos_json.py does NOT cut off expressions anymore.
 #
 # If None, do not compress by segment budget.
-MAX_SEGMENTS = 1500
+MAX_SEGMENTS = 2000
 
 # Desmos line style for SVG paths.
 LINE_WIDTH = 1

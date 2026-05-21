@@ -154,11 +154,16 @@ def start_server():
     return server
 
 
-def get_viewer_url():
+def get_viewer_url(direct=False):
     relative_html = C.PATH_DESMOS_VIEWER.relative_to(C.PROJECT_ROOT)
     url_path = "/" + relative_html.as_posix()
 
-    return f"http://127.0.0.1:{C.PORT}{url_path}"
+    url = f"http://127.0.0.1:{C.PORT}{url_path}"
+
+    if direct:
+        url += "?direct=1"
+
+    return url
 
 
 # ============================================================
@@ -175,7 +180,7 @@ def prepare_viewport_if_needed(svg_files):
     if not C.WAIT_BEFORE_DESMOS_IMG_RENDER:
         return None
 
-    viewer_url = get_viewer_url()
+    viewer_url = get_viewer_url(direct=True)
     first_frame_data = svg_to_frame_data(svg_files[0])
 
     with sync_playwright() as p:
@@ -347,7 +352,7 @@ def render_worker(worker_id, jobs, storage_state):
 
     No current_frame.json is used here.
     """
-    viewer_url = get_viewer_url()
+    viewer_url = get_viewer_url(direct=True)
 
     with sync_playwright() as p:
         browser, context, page = open_browser_page(
