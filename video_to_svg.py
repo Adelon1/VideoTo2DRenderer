@@ -1,79 +1,40 @@
-from pathlib import Path
 from fractions import Fraction
 import json
 import shutil
 import subprocess
-import sys
-
-import constants
+import time
 
 import numpy as np
 
+import constants as C
 
-# =====================
-# Settings you can edit
-# =====================
-
-INPUT_MP4 = Path(constants.FOLDER_NAME) / constants.SOURCE_VIDEO_NAME
-OUTPUT_DIR = Path(constants.FOLDER_SVG)
-RUN_INFO_FILE = OUTPUT_DIR / "processing_info.txt"
-
-# Set to None to use the video's original FPS.
-FPS = constants.FPS
-
-# Set to None to use the video's original width.
-SCALE_WIDTH = constants.SCALE_WIDTH
-
-# Use "edges" for Desmos-style line art.
-# Use "threshold" for black/white silhouette style.
-MODE = "edges"
-
-# Used only in MODE = "threshold"
-THRESHOLD = 140
-
-# Used only in MODE = "edges"
-EDGE_THRESHOLD = 35
-
-# Potrace simplification/noise settings
-TURD_SIZE = 8
-OPT_TOLERANCE = 0.8
-
-# Set to None for the whole video.
-# Set to a small number like 10 for testing.
-FRAME_LIMIT = constants.FRAME_LIMIT
-
-POTRACE_UNIT = 1
 
 def main():
+    start_time = time.time()
+
     check_tools()
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_output_folder()
 
-    video_info = get_video_info(INPUT_MP4)
+    video_info = get_video_info(C.PATH_SOURCE_VIDEO)
 
-    effective_fps = video_info["fps"] if FPS is None else to_fraction(FPS)
-    width, height = get_output_size(video_info, SCALE_WIDTH)
+    effective_fps = video_info["fps"] if C.FPS is None else to_fraction(C.FPS)
+    width, height = get_output_size(video_info, C.SCALE_WIDTH)
 
-    config = build_config(
+    config = build_processing_config(
         video_info=video_info,
         effective_fps=effective_fps,
         width=width,
         height=height,
     )
 
-    print(f"Input: {INPUT_MP4}")
-    print(f"Source size: {video_info['source_width']}x{video_info['source_height']}")
-    print(f"Output size: {width}x{height}")
-    print(f"FPS: {format_fraction(effective_fps)}")
-    print(f"Mode: {MODE}")
-    print(f"Output folder: {OUTPUT_DIR}")
+    print_job_info(video_info, width, height, effective_fps)
 
-    if already_processed(config):
-        print("Already processed with the same settings. Skipping.")
+    if svg_processing_is_current(config):
+        print("SVG frames already exist with the same processing settings. Skipping.")
         return
 
     clear_old_svg_files()
-
-    write_run_info(config, processed_frames=0, status="in_progress")
+    write_processing_info(config=config, status="in_progress", processed_frames=0)
 
     frame_count = process_video_to_svgs(
         width=width,
@@ -81,17 +42,51 @@ def main():
         effective_fps=effective_fps,
     )
 
-    write_run_info(config, processed_frames=frame_count, status="complete")
+    write_processing_info(config=config, status="complete", processed_frames=frame_count)
 
+    elapsed = time.time() - start_time
     print(f"Done. Created {frame_count} SVG files.")
+    print(f"Elapsed: {elapsed:.2f}s")
 
+
+# ============================================================
+# Setup
+# ============================================================
 
 def check_tools():
     for tool in ["ffmpeg", "ffprobe", "potrace"]:
         if shutil.which(tool) is None:
-            print(f"Error: {tool} is not installed or not in PATH.")
-            sys.exit(1)
+            raise RuntimeError(f"{tool} is not installed or not in PATH.")
 
+    if not C.PATH_SOURCE_VIDEO.exists():
+        raise RuntimeError(
+            f"Source video not found: {C.PATH_SOURCE_VIDEO}\n"
+            "Run getVideo.py first."
+        )
+
+
+def ensure_output_folder():
+    C.PATH_SVG_FOLDER.mkdir(parents=True, exist_ok=True)
+
+
+def print_job_info(video_info, width, height, effective_fps):
+    print()
+    print("VideoTo2DRenderer video-to-SVG job")
+    print("----------------------------------")
+    print(f"Source video:  {C.PATH_SOURCE_VIDEO}")
+    print(f"SVG folder:    {C.PATH_SVG_FOLDER}")
+    print(f"Process info:  {C.PATH_PROCESSING_INFO}")
+    print(f"Source size:   {video_info['source_width']}x{video_info['source_height']}")
+    print(f"Output size:   {width}x{height}")
+    print(f"FPS:           {format_fraction(effective_fps)}")
+    print(f"Mode:          {C.VIDEO_PROCESSING_MODE}")
+    print(f"Frame limit:   {C.FRAME_LIMIT}")
+    print()
+
+
+# ============================================================
+# Video metadata
+# ============================================================
 
 def get_video_info(video_path):
     cmd = [
@@ -103,7 +98,7 @@ def get_video_info(video_path):
         "-show_entries",
         "format=duration",
         "-of", "json",
-        video_path,
+        str(video_path),
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -112,13 +107,7 @@ def get_video_info(video_path):
     stream = data["streams"][0]
     format_data = data.get("format", {})
 
-    source_width = int(stream["width"])
-    source_height = int(stream["height"])
-
-    fps = parse_fps(stream.get("avg_frame_rate"))
-
-    if fps is None:
-        fps = parse_fps(stream.get("r_frame_rate"))
+    fps = parse_fps(stream.get("avg_frame_rate")) or parse_fps(stream.get("r_frame_rate"))
 
     if fps is None:
         raise RuntimeError("Could not detect video FPS.")
@@ -129,15 +118,15 @@ def get_video_info(video_path):
     nb_frames = stream.get("nb_frames")
     nb_frames = int(nb_frames) if nb_frames and nb_frames.isdigit() else None
 
-    input_path = Path(video_path)
-    stat = input_path.stat()
+    video_path = video_path.resolve()
+    stat = video_path.stat()
 
     return {
-        "input_file": str(input_path.resolve()),
+        "input_file": str(video_path),
         "input_size_bytes": stat.st_size,
         "input_modified_ns": stat.st_mtime_ns,
-        "source_width": source_width,
-        "source_height": source_height,
+        "source_width": int(stream["width"]),
+        "source_height": int(stream["height"]),
         "fps": fps,
         "duration": duration,
         "nb_frames": nb_frames,
@@ -148,10 +137,7 @@ def parse_fps(value):
     if not value or value == "0/0":
         return None
 
-    try:
-        fps = Fraction(value)
-    except ValueError:
-        return None
+    fps = Fraction(value)
 
     if fps <= 0:
         return None
@@ -195,9 +181,13 @@ def get_output_size(video_info, scale_width):
     return target_width, target_height
 
 
-def build_config(video_info, effective_fps, width, height):
+# ============================================================
+# Cache
+# ============================================================
+
+def build_processing_config(video_info, effective_fps, width, height):
     return {
-        "script_version": 2,
+        "video_to_svg_cache_version": C.VIDEO_TO_SVG_CACHE_VERSION,
 
         "input_file": video_info["input_file"],
         "input_size_bytes": video_info["input_size_bytes"],
@@ -209,74 +199,73 @@ def build_config(video_info, effective_fps, width, height):
         "source_duration": video_info["duration"],
         "source_nb_frames": video_info["nb_frames"],
 
-        "potrace_unit": POTRACE_UNIT,
-
-        "requested_fps": "source" if FPS is None else str(FPS),
+        "requested_fps": "source" if C.FPS is None else str(C.FPS),
         "effective_fps": format_fraction(effective_fps),
 
-        "requested_scale_width": "source" if SCALE_WIDTH is None else SCALE_WIDTH,
+        "requested_scale_width": "source" if C.SCALE_WIDTH is None else C.SCALE_WIDTH,
         "output_width": width,
         "output_height": height,
 
-        "mode": MODE,
-        "threshold": THRESHOLD,
-        "edge_threshold": EDGE_THRESHOLD,
-        "turd_size": TURD_SIZE,
-        "opt_tolerance": OPT_TOLERANCE,
-        "frame_limit": FRAME_LIMIT,
+        "frame_limit": C.FRAME_LIMIT,
+
+        "video_processing_mode": C.VIDEO_PROCESSING_MODE,
+        "threshold": C.THRESHOLD,
+        "edge_threshold": C.EDGE_THRESHOLD,
+
+        "potrace_unit": C.POTRACE_UNIT,
+        "turd_size": C.TURD_SIZE,
+        "opt_tolerance": C.OPT_TOLERANCE,
     }
 
 
-def already_processed(current_config):
-    if not RUN_INFO_FILE.exists():
+def svg_processing_is_current(current_config):
+    if not C.PATH_PROCESSING_INFO.exists():
         return False
 
     try:
-        previous = json.loads(RUN_INFO_FILE.read_text())
+        previous = json.loads(C.PATH_PROCESSING_INFO.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        print("Found old processing_info.txt, but it is not valid JSON. Reprocessing.")
         return False
 
-    previous_config = previous.get("config")
-    previous_status = previous.get("status")
-    previous_frame_count = previous.get("processed_frames")
-
-    if previous_config != current_config:
-        print("Settings changed since last run. Reprocessing.")
+    if previous.get("status") != "complete":
         return False
 
-    if previous_status != "complete":
-        print("Previous run was not complete. Reprocessing.")
+    if previous.get("config") != current_config:
         return False
 
-    if previous_frame_count is None:
-        print("Previous run info has no frame count. Reprocessing.")
+    expected_frames = previous.get("processed_frames")
+
+    if not isinstance(expected_frames, int) or expected_frames <= 0:
         return False
 
-    actual_svg_count = len(list(OUTPUT_DIR.glob("frame_*.svg")))
+    for index in range(expected_frames):
+        path = C.PATH_SVG_FOLDER / f"frame_{index:05d}.svg"
 
-    if actual_svg_count != previous_frame_count:
-        print(
-            f"Expected {previous_frame_count} SVG files, "
-            f"but found {actual_svg_count}. Reprocessing."
-        )
-        return False
+        if not path.exists():
+            return False
 
     return True
 
 
-def write_run_info(config, processed_frames, status):
+def write_processing_info(config, status, processed_frames):
     data = {
         "status": status,
         "processed_frames": processed_frames,
         "config": config,
     }
 
-    RUN_INFO_FILE.write_text(json.dumps(data, indent=2))
+    C.PATH_PROCESSING_INFO.write_text(
+        json.dumps(data, indent=2),
+        encoding="utf-8",
+    )
 
+
+# ============================================================
+# Conversion
+# ============================================================
 
 def clear_old_svg_files():
-    old_files = list(OUTPUT_DIR.glob("frame_*.svg"))
+    old_files = list(C.PATH_SVG_FOLDER.glob("frame_*.svg"))
 
     if old_files:
         print(f"Removing {len(old_files)} old SVG files...")
@@ -290,10 +279,10 @@ def process_video_to_svgs(width, height, effective_fps):
 
     filter_parts = []
 
-    if FPS is not None:
+    if C.FPS is not None:
         filter_parts.append(f"fps={format_fraction(effective_fps)}")
 
-    if SCALE_WIDTH is not None:
+    if C.SCALE_WIDTH is not None:
         filter_parts.append(f"scale={width}:{height}")
 
     ffmpeg_cmd = [
@@ -301,7 +290,7 @@ def process_video_to_svgs(width, height, effective_fps):
         "-hide_banner",
         "-loglevel", "error",
         "-nostdin",
-        "-i", INPUT_MP4,
+        "-i", str(C.PATH_SOURCE_VIDEO),
     ]
 
     if filter_parts:
@@ -312,8 +301,8 @@ def process_video_to_svgs(width, height, effective_fps):
         "-pix_fmt", "gray",
     ]
 
-    if FRAME_LIMIT is not None:
-        ffmpeg_cmd += ["-frames:v", str(FRAME_LIMIT)]
+    if C.FRAME_LIMIT is not None:
+        ffmpeg_cmd += ["-frames:v", str(C.FRAME_LIMIT)]
 
     ffmpeg_cmd += ["-"]
 
@@ -339,10 +328,9 @@ def process_video_to_svgs(width, height, effective_fps):
             gray = np.frombuffer(raw_frame, dtype=np.uint8).reshape((height, width))
 
             black_white = process_frame(gray)
-
             pbm_data = bitmap_to_pbm(black_white, width, height)
 
-            output_svg = OUTPUT_DIR / f"frame_{frame_index:05d}.svg"
+            output_svg = C.PATH_SVG_FOLDER / f"frame_{frame_index:05d}.svg"
 
             run_potrace(pbm_data, output_svg)
 
@@ -367,12 +355,10 @@ def process_video_to_svgs(width, height, effective_fps):
 
 
 def process_frame(gray):
-    if MODE == "threshold":
-        # Dark pixels become black, light pixels become white.
-        return gray < THRESHOLD
+    if C.VIDEO_PROCESSING_MODE == "threshold":
+        return gray < C.THRESHOLD
 
-    if MODE == "edges":
-        # Simple edge detection.
+    if C.VIDEO_PROCESSING_MODE == "edges":
         gray_int = gray.astype(np.int16)
 
         dx = np.abs(gray_int[:, 1:] - gray_int[:, :-1])
@@ -382,10 +368,9 @@ def process_frame(gray):
         edges[:, 1:] = np.maximum(edges[:, 1:], dx)
         edges[1:, :] = np.maximum(edges[1:, :], dy)
 
-        # Strong edges become black.
-        return edges > EDGE_THRESHOLD
+        return edges > C.EDGE_THRESHOLD
 
-    raise ValueError(f"Unknown MODE: {MODE}")
+    raise ValueError(f"Unknown VIDEO_PROCESSING_MODE: {C.VIDEO_PROCESSING_MODE}")
 
 
 def bitmap_to_pbm(black_pixels, width, height):
@@ -411,9 +396,9 @@ def run_potrace(pbm_data, output_svg):
     cmd = [
         "potrace",
         "-s",
-        "--unit", str(POTRACE_UNIT),
-        "--turdsize", str(TURD_SIZE),
-        "--opttolerance", str(OPT_TOLERANCE),
+        "--unit", str(C.POTRACE_UNIT),
+        "--turdsize", str(C.TURD_SIZE),
+        "--opttolerance", str(C.OPT_TOLERANCE),
         "-o", str(output_svg),
         "-",
     ]
@@ -429,6 +414,10 @@ def run_potrace(pbm_data, output_svg):
         print(result.stderr.decode(errors="replace"))
         raise RuntimeError("potrace failed")
 
+
+# ============================================================
+# Entrypoint
+# ============================================================
 
 if __name__ == "__main__":
     main()

@@ -1,12 +1,76 @@
+# ============================================================
+# Python
+# ============================================================
+
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-*.svg
+
+# ============================================================
+# Ignore generated root-level project folders
+# ============================================================
+
+# Every video gets its own folder, and those folders contain generated files.
+# This ignores folders like:
+# Bad_Apple/
+# Another_Video/
+/*/
+
+
+# ============================================================
+# Keep source folders that should be tracked
+# ============================================================
+
+# Keep the Desmos source folder, but ignore generated JSON inside it.
+!/desmos/
+!/desmos/desmos_viewer.html
+/desmos/current_frame.json
+
+
+# ============================================================
+# Generated video/project outputs
+# ============================================================
+
+*/output_svg/
+*/rendered_frames/
+*/desmos_render.mp4
+
+*/download_info.txt
+*/processing_info.txt
+*/desmos_img_info.txt
+*/video_info.txt
+*/render_info.txt
+
+*/overlay_preview.png
+*/overlay_preview.html
+
+
+# ============================================================
+# Input/output media files
+# ============================================================
+
 *.mp4
 *.webm
 *.mkv
 *.mov
-*.json
+*.avi
+*.mp3
+*.wav
+*.aac
+*.m4a
 
-desmos_frame.html
+
+# ============================================================
+# Keep important root files tracked
+# ============================================================
+
+!*.py
+!README.md
+!requirements.txt
+!.gitignore

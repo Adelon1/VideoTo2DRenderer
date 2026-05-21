@@ -1,4 +1,8 @@
+greenlet==3.5.1
 numpy==2.4.6
+playwright==1.60.0
+pyee==13.0.1
 scipy==1.17.1
 svgpathtools==1.7.2
 svgwrite==1.4.3
+typing_extensions==4.15.0

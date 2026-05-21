@@ -56,12 +56,17 @@
       gap: 6px;
       align-items: center;
       flex-wrap: wrap;
-      max-width: 460px;
+      max-width: 520px;
       box-shadow: 0 4px 16px rgba(0,0,0,0.12);
     }
 
     #toolbar.open {
       display: flex;
+    }
+
+    body.screenshot-mode #miniControls,
+    body.screenshot-mode #toolbar {
+      display: none !important;
     }
 
     button {
@@ -87,6 +92,7 @@
     <button id="fitFrame">Fit Frame</button>
     <button id="saveDefaultView">Save View as Default</button>
     <button id="clearDefaultView">Clear Default View</button>
+    <button id="testScreenshot">Test Screenshot</button>
     <button id="hideToolbar">Hide</button>
     <span id="status">Idle</span>
   </div>
@@ -104,7 +110,13 @@
 
     let calculator = null;
     let calculatorOptionsKey = null;
+    let lastFrameData = null;
     let lastFrameViewport = null;
+
+    window.__V2D_RENDER_DONE = false;
+    window.__V2D_RENDER_FRAME = null;
+    window.__V2D_RENDER_ERROR = null;
+    window.__V2D_RENDER_STAGE = "idle";
 
     function normalizeSettings(settings) {
       return {
@@ -152,6 +164,11 @@
     }
 
     async function loadFrame() {
+      window.__V2D_RENDER_DONE = false;
+      window.__V2D_RENDER_FRAME = null;
+      window.__V2D_RENDER_ERROR = null;
+      window.__V2D_RENDER_STAGE = "loading-json";
+
       try {
         status.textContent = "Loading...";
 
@@ -164,23 +181,115 @@
         const data = await response.json();
         const settings = normalizeSettings(data.settings);
 
+        window.__V2D_RENDER_STAGE = "creating-calculator";
+
         ensureCalculator(settings);
 
         calculator.setBlank();
         applyGraphSettings(settings);
 
+        lastFrameData = data;
         lastFrameViewport = data.viewport || null;
+
+        window.__V2D_RENDER_STAGE = "setting-expressions";
 
         calculator.setExpressions(data.expressions || []);
 
         applyBestViewport();
 
+        window.__V2D_RENDER_FRAME = data.frame_number ?? null;
+        window.__V2D_RENDER_STAGE = "ready-for-async-screenshot";
+        window.__V2D_RENDER_DONE = true;
+
         status.textContent =
           "Frame " + (data.frame_number ?? "?") +
           " · " + (data.expressions || []).length + " expressions";
+
+        return true;
       } catch (error) {
         console.error(error);
+        window.__V2D_RENDER_ERROR = String(error);
+        window.__V2D_RENDER_DONE = false;
+        window.__V2D_RENDER_STAGE = "error";
         status.textContent = "Error loading frame";
+        return false;
+      }
+    }
+
+    function getCurrentScreenshotMathBounds() {
+      const savedViewport = getSavedViewport();
+
+      if (savedViewport) {
+        return savedViewport;
+      }
+
+      if (lastFrameViewport) {
+        return lastFrameViewport;
+      }
+
+      return calculator.graphpaperBounds.mathCoordinates;
+    }
+
+    function buildScreenshotOptions() {
+      const screenshot = lastFrameData?.screenshot || {};
+
+      return {
+        format: screenshot.format ?? "png",
+        width: screenshot.width ?? 1920,
+        height: screenshot.height ?? 1080,
+        targetPixelRatio: screenshot.target_pixel_ratio ?? 1,
+        mode: screenshot.mode ?? "stretch",
+        mathBounds: getCurrentScreenshotMathBounds(),
+        showMovablePoints: screenshot.show_movable_points ?? false,
+        showLabels: screenshot.show_labels ?? false
+      };
+    }
+
+    async function captureCurrentFrameScreenshot() {
+      if (!calculator) {
+        throw new Error("Calculator is not initialized.");
+      }
+
+      if (!lastFrameData) {
+        throw new Error("No frame data has been loaded.");
+      }
+
+      window.__V2D_RENDER_STAGE = "async-screenshot";
+
+      const options = buildScreenshotOptions();
+
+      return new Promise((resolve, reject) => {
+        try {
+          calculator.asyncScreenshot(options, function (dataUri) {
+            if (!dataUri) {
+              reject(new Error("Desmos asyncScreenshot returned empty data."));
+              return;
+            }
+
+            window.__V2D_RENDER_STAGE = "screenshot-complete";
+            resolve(dataUri);
+          });
+        } catch (error) {
+          window.__V2D_RENDER_ERROR = String(error);
+          window.__V2D_RENDER_STAGE = "screenshot-error";
+          reject(error);
+        }
+      });
+    }
+
+    async function testScreenshot() {
+      try {
+        status.textContent = "Capturing screenshot...";
+
+        const dataUri = await captureCurrentFrameScreenshot();
+
+        const tab = window.open();
+        tab.document.write(`<img src="${dataUri}" style="max-width: 100%; height: auto;">`);
+
+        status.textContent = "Screenshot opened";
+      } catch (error) {
+        console.error(error);
+        status.textContent = "Screenshot failed";
       }
     }
 
@@ -262,12 +371,22 @@
       }
     }
 
+    function setScreenshotMode(enabled) {
+      document.body.classList.toggle("screenshot-mode", enabled);
+    }
+
+    window.loadFrame = loadFrame;
+    window.fitFrame = fitFrame;
+    window.setScreenshotMode = setScreenshotMode;
+    window.captureCurrentFrameScreenshot = captureCurrentFrameScreenshot;
+
     document.getElementById("toggleToolbar").onclick = toggleToolbar;
     document.getElementById("quickReload").onclick = loadFrame;
     document.getElementById("loadFrame").onclick = loadFrame;
     document.getElementById("fitFrame").onclick = fitFrame;
     document.getElementById("saveDefaultView").onclick = saveDefaultView;
     document.getElementById("clearDefaultView").onclick = clearDefaultView;
+    document.getElementById("testScreenshot").onclick = testScreenshot;
     document.getElementById("hideToolbar").onclick = toggleToolbar;
 
     document.getElementById("clearFrame").onclick = function () {
@@ -278,8 +397,6 @@
       status.textContent = "Cleared";
     };
 
-    // Press H to hide/show the toolbar.
-    // Press R to reload the current frame.
     window.addEventListener("keydown", function (event) {
       if (event.key.toLowerCase() === "h") {
         toggleToolbar();
